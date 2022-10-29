@@ -3,6 +3,7 @@ use deno_core::error::AnyError;
 use deno_core::v8;
 use deno_runtime::permissions::Permissions;
 use deno_runtime::{deno_core, BootstrapOptions};
+use std::cell::RefCell;
 use std::{rc::Rc, sync::Arc};
 mod module_loader;
 
@@ -47,24 +48,25 @@ async fn run_js(file_path: &str) -> Result<(), AnyError> {
         stdio: Default::default(),
     };
 
-    let mut runtime = deno_runtime::worker::MainWorker::bootstrap_from_options(
+    let runtime = RefCell::new(deno_runtime::worker::MainWorker::bootstrap_from_options(
         main_module.clone(),
         Permissions::allow_all(),
         options,
     )
-    .js_runtime;
+    .js_runtime);
 
     let module_id = runtime
-        .load_main_module(
+        .borrow_mut().load_main_module(
             &main_module,
             Some(r#"export const obj = {name: "gorilla"}; console.log("name:", name); "#.into()),
         )
         .await?;
 
-    let global_scope = runtime.get_module_namespace(module_id).unwrap();
+    let global_scope = runtime.borrow_mut().get_module_namespace(module_id).unwrap();
     {
         {
-            let handle_scope = &mut runtime.handle_scope();
+            let runtime2 = &mut runtime.borrow_mut();
+            let handle_scope = &mut runtime2.handle_scope();
             let local_scope = v8::Local::<v8::Object>::new(handle_scope, &global_scope);
 
             let key = serde_v8::to_v8(handle_scope, "name")?;
@@ -72,11 +74,12 @@ async fn run_js(file_path: &str) -> Result<(), AnyError> {
             local_scope.set(handle_scope, key, value);
         }
 
-        let _ = runtime.mod_evaluate(module_id);
-        runtime.run_event_loop(false).await?;
+        let _ = runtime.borrow_mut().mod_evaluate(module_id);
+        runtime.borrow_mut().run_event_loop(false).await?;
     }
 
-    let scope = &mut runtime.handle_scope();
+    let runtime3 = &mut runtime.borrow_mut();
+    let scope = &mut runtime3.handle_scope();
     let local_object = v8::Local::<v8::Object>::new(scope, global_scope);
 
     let default_export_name = v8::String::new(scope, "obj").unwrap();
